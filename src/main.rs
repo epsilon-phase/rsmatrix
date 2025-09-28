@@ -17,6 +17,16 @@ lazy_static! {
             .map(|c| *c)
             .collect()
     };
+    static ref HIRAGANA_CHARS: Vec<char> = {
+        let mut q: Vec<char> = Vec::new();
+        for i in 0x3040..0x309F {
+            if i == 0x3040 || (0x3097..0x3098).contains(&i) {
+                continue;
+            }
+            q.push(char::from_u32(i).unwrap());
+        }
+        q.drain(..).collect()
+    };
 }
 enum Direction {
     Up,
@@ -116,7 +126,9 @@ impl Screen {
             ret.columns = 80;
             ret.rows = 24;
         }
-
+        if ret.rows > 1 {
+            ret.rows -= 1;
+        }
         for _j in 0..ret.columns {
             ret.columns_producing.push(0);
         }
@@ -143,7 +155,13 @@ impl Screen {
     }
     fn produce(&mut self) {
         let mut rng = rand::thread_rng();
+        let mut skip_next = 0;
         for x in 0..self.columns {
+            if skip_next > 0 {
+                self.set_cell(x, 0, Some(' '), None);
+                skip_next -= 1;
+                continue;
+            }
             let i = self.columns_producing[x];
             if i > 0 {
                 let c = if rng.gen() {
@@ -151,7 +169,16 @@ impl Screen {
                 } else {
                     None
                 };
-                self.set_cell(x, 0, Some(*ASCII_CHARS.choose(&mut rng).unwrap()), c);
+                let which_range = rng.gen_range(0, 10);
+                let current_char = if which_range < 5 {
+                    *ASCII_CHARS.choose(&mut rng).unwrap()
+                } else {
+                    *HIRAGANA_CHARS.choose(&mut rng).unwrap()
+                };
+                if let Some(x) = unicode_width::UnicodeWidthChar::width_cjk(current_char) {
+                    skip_next = if x > 1 { x - 1 } else { 0 };
+                }
+                self.set_cell(x, 0, Some(current_char), c);
             } else {
                 self.set_cell(x, 0, Some(' '), None);
             }
@@ -194,7 +221,7 @@ impl Screen {
             result.push(Move(1, y as u32));
             for x in 0..self.columns {
                 let (character, color) = self.get_cell(x, y);
-                // result.push(Move(x as u32, y as u32));
+                result.push(Move(x as u32, y as u32));
                 result.push(Color256(color, false));
                 result.push(Cell(character));
             }
@@ -206,6 +233,7 @@ fn main() {
     let mut color_picker = ColorPickerOption::Greens;
     let mut state = 0;
     let mut milliseconds_per_frame = 1000 / 30;
+    // TODO add a way to choose which character ranges are enabled.
     for arg in std::env::args() {
         if state == 1 {
             milliseconds_per_frame = arg.parse().unwrap();
