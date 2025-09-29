@@ -262,7 +262,6 @@ fn main() {
     let mut color_picker = ColorPickerOption::Greens;
     let mut state = 0;
     let mut milliseconds_per_frame = 1000 / 30;
-    // TODO add a way to choose which character ranges are enabled.
     let mut charset_choices = CharsetChoices {
         ascii: true,
         ..Default::default()
@@ -292,6 +291,7 @@ fn main() {
     let mut screen = Screen::new(color_picker, charset_choices);
     let mut commands: Vec<AnsiCommand> = Vec::new();
     let mut output_buffer: String = String::new();
+    let mut last = std::time::Instant::now();
     loop {
         commands.clear();
         screen.to_commands(&mut commands);
@@ -301,8 +301,11 @@ fn main() {
         }
         print!("{}", output_buffer);
         std::io::stdout().flush().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(milliseconds_per_frame));
+        let now = std::time::Instant::now();
+        let diff = (now - last).min(std::time::Duration::from_millis(milliseconds_per_frame));
+        std::thread::sleep(std::time::Duration::from_millis(milliseconds_per_frame) - diff);
         screen.tick();
+        last = now;
     }
 }
 impl Display for AnsiCommand {
