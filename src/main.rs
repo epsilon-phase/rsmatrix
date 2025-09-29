@@ -1,33 +1,15 @@
+mod charset_gen;
+
 extern crate num;
 extern crate rand;
 #[macro_use]
 extern crate lazy_static;
+use crate::charset_gen::{ascii_chars, hiragana_chars};
 use crate::rand::prelude::SliceRandom;
 use crate::rand::{thread_rng, Rng};
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
-lazy_static! {
-    static ref ASCII_CHARS: Vec<char> = {
-        let mut q: Vec<char> = Vec::new();
-        for i in 0u8..255u8 {
-            q.push(i as char);
-        }
-        q.iter()
-            .filter(|c| c.is_ascii_alphanumeric())
-            .map(|c| *c)
-            .collect()
-    };
-    static ref HIRAGANA_CHARS: Vec<char> = {
-        let mut q: Vec<char> = Vec::new();
-        for i in 0x3040..0x309F {
-            if i == 0x3040 || (0x3097..0x3098).contains(&i) {
-                continue;
-            }
-            q.push(char::from_u32(i).unwrap());
-        }
-        q.drain(..).collect()
-    };
-}
+
 enum Direction {
     Up,
     Down,
@@ -53,6 +35,7 @@ struct Screen {
     cells: Vec<(char, u8)>, //Character,color
     columns_producing: Vec<i8>,
     color_picker: ColorPickerOption,
+    character_sets: Vec<Vec<char>>,
 }
 struct ScreenIterator<'a> {
     screen: &'a Screen,
@@ -108,13 +91,15 @@ impl ColorPicker256 for GreenPicker {
 }
 
 impl Screen {
-    fn new(color_pick: ColorPickerOption) -> Screen {
+    fn new(color_pick: ColorPickerOption, charsets: CharsetChoices) -> Screen {
+
         let mut ret: Screen = Screen {
             columns: 80,
             rows: 24,
             cells: Vec::new(),
             columns_producing: Vec::new(),
             color_picker: color_pick,
+            character_sets:charsets.to_char_vecs()
         };
         use terminal_size::{terminal_size, Height, Width};
 
@@ -158,7 +143,7 @@ impl Screen {
         let mut skip_next = 0;
         for x in 0..self.columns {
             if skip_next > 0 {
-                self.set_cell(x, 0, Some(' '), None);
+                self.set_cell(x, 0, None, None);
                 skip_next -= 1;
                 continue;
             }
@@ -169,13 +154,13 @@ impl Screen {
                 } else {
                     None
                 };
-                let which_range = rng.gen_range(0, 10);
-                let current_char = if which_range < 5 {
-                    *ASCII_CHARS.choose(&mut rng).unwrap()
-                } else {
-                    *HIRAGANA_CHARS.choose(&mut rng).unwrap()
-                };
-                if let Some(x) = unicode_width::UnicodeWidthChar::width_cjk(current_char) {
+                let current_char = *self
+                    .character_sets
+                    .choose(&mut rng)
+                    .unwrap()
+                    .choose(&mut rng)
+                    .unwrap();
+                if let Some(x) = unicode_width::UnicodeWidthChar::width(current_char) {
                     skip_next = if x > 1 { x - 1 } else { 0 };
                 }
                 self.set_cell(x, 0, Some(current_char), c);
@@ -194,7 +179,7 @@ impl Screen {
     }
     fn reset_producing(&mut self) {
         for i in 0..self.columns {
-            if self.columns_producing[i] < -10 && rand::random() {
+            if self.columns_producing[i] < -((self.rows / 2) as i8) && rand::random() {
                 self.columns_producing[i] = thread_rng().gen_range(5i8, self.rows as i8);
             }
         }
@@ -219,14 +204,58 @@ impl Screen {
         result.push(Move(0, 0));
         for y in 0..self.rows {
             result.push(Move(1, y as u32));
+            let mut effective_x = 0u32;
             for x in 0..self.columns {
                 let (character, color) = self.get_cell(x, y);
-                result.push(Move(x as u32, y as u32));
+                // Uh, I guess this works? It seems kinda weird.
+                effective_x += unicode_width::UnicodeWidthChar::width(character).unwrap() as u32;
+                result.push(Move(effective_x, y as u32));
                 result.push(Color256(color, false));
                 result.push(Cell(character));
             }
         }
     }
+}
+#[derive(Default)]
+struct CharsetChoices {
+    ascii: bool,
+    hiragana: bool,
+    cjk: bool,
+}
+impl CharsetChoices {
+    fn read_from_arg(&mut self, arg: &str) {
+        let to_set = !arg.starts_with("-");
+        if arg.ends_with("ascii") {
+            self.ascii = to_set;
+        } else if arg.ends_with("hiragana") {
+            self.hiragana = to_set;
+        } else if arg.ends_with("cjk") {
+            self.cjk = to_set;
+        }
+    }
+    fn to_char_vecs(&self) -> Vec<Vec<char>> {
+        let mut ret = Vec::new();
+        if self.ascii {
+            ret.push(charset_gen::ascii_chars());
+        }
+        if self.hiragana {
+            ret.push(charset_gen::hiragana_chars());
+        }
+        if self.cjk {
+            ret.push(charset_gen::cjk_chars());
+        }
+        ret
+    }
+}
+fn print_help() {
+    println!("Usage: {}", std::env::args().nth(0).unwrap());
+    println!("-any\tUse any of the 256 colors available");
+    println!("-charset <set>\t\tEnable a charset");
+    println!("\t\tascii Enable ascii characters");
+    println!("\t\tcjk Enable the CJK charset");
+    println!("\t\thiragana Enable the hiragana set");
+    println!("\t\tPrefixing the charset with a '-' will disable that charset. Useful for ascii");
+    println!("-frame <N>\tPrint N frames a second");
 }
 fn main() {
     use std::io::Write;
@@ -234,19 +263,33 @@ fn main() {
     let mut state = 0;
     let mut milliseconds_per_frame = 1000 / 30;
     // TODO add a way to choose which character ranges are enabled.
+    let mut charset_choices = CharsetChoices {
+        ascii: true,
+        ..Default::default()
+    };
     for arg in std::env::args() {
         if state == 1 {
             milliseconds_per_frame = arg.parse().unwrap();
             milliseconds_per_frame = 1000 / milliseconds_per_frame;
             state = 0;
         }
+        if state == 2 {
+            charset_choices.read_from_arg(&arg);
+            state = 0;
+        }
         if arg == "-any" {
             color_picker = ColorPickerOption::Any;
         } else if arg == "-frame" {
             state = 1;
+        } else if arg == "-charset" {
+            state = 2;
+        }
+        if arg == "-help" || arg == "-h" {
+            print_help();
+            return;
         }
     }
-    let mut screen = Screen::new(color_picker);
+    let mut screen = Screen::new(color_picker, charset_choices);
     let mut commands: Vec<AnsiCommand> = Vec::new();
     let mut output_buffer: String = String::new();
     loop {
