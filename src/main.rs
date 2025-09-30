@@ -35,7 +35,7 @@ struct Screen {
     cells: Vec<(char, u8)>, //Character,color
     columns_producing: Vec<i8>,
     color_picker: ColorPickerOption,
-    character_sets: Vec<Vec<char>>,
+    character_sets: Vec<char>,
 }
 struct ScreenIterator<'a> {
     screen: &'a Screen,
@@ -92,14 +92,13 @@ impl ColorPicker256 for GreenPicker {
 
 impl Screen {
     fn new(color_pick: ColorPickerOption, charsets: CharsetChoices) -> Screen {
-
         let mut ret: Screen = Screen {
             columns: 80,
             rows: 24,
             cells: Vec::new(),
             columns_producing: Vec::new(),
             color_picker: color_pick,
-            character_sets:charsets.to_char_vecs()
+            character_sets: charsets.to_char_vecs(),
         };
         use terminal_size::{terminal_size, Height, Width};
 
@@ -154,12 +153,7 @@ impl Screen {
                 } else {
                     None
                 };
-                let current_char = *self
-                    .character_sets
-                    .choose(&mut rng)
-                    .unwrap()
-                    .choose(&mut rng)
-                    .unwrap();
+                let current_char = *self.character_sets.choose(&mut rng).unwrap();
                 if let Some(x) = unicode_width::UnicodeWidthChar::width(current_char) {
                     skip_next = if x > 1 { x - 1 } else { 0 };
                 }
@@ -233,7 +227,7 @@ impl CharsetChoices {
             self.cjk = to_set;
         }
     }
-    fn to_char_vecs(&self) -> Vec<Vec<char>> {
+    fn to_char_vecs(&self) -> Vec<char> {
         let mut ret = Vec::new();
         if self.ascii {
             ret.push(charset_gen::ascii_chars());
@@ -244,7 +238,7 @@ impl CharsetChoices {
         if self.cjk {
             ret.push(charset_gen::cjk_chars());
         }
-        ret
+        ret.concat()
     }
 }
 fn print_help() {
